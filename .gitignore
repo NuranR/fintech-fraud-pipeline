@@ -1,0 +1,7 @@
+__pycache__/
+.env
+.vscode/
+data/
+*.log
+.DS_Store
+checkpoint/
