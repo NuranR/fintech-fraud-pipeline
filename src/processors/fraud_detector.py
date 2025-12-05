@@ -37,6 +37,7 @@ def create_spark_session():
         .config("spark.streaming.stopGracefullyOnShutdown", "true") \
         .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
         .config("spark.sql.shuffle.partitions", "3") \
+        .config("spark.ui.port", "0") \
         .getOrCreate()
 
 def process_batch(batch_df, batch_id):
