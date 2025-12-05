@@ -4,6 +4,7 @@ import random
 import logging
 from datetime import datetime, timedelta
 from kafka import KafkaProducer
+from kafka.admin import KafkaAdminClient, NewTopic
 from faker import Faker
 import config  # Imports config.py
 
@@ -15,6 +16,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 fake = Faker()
+
+def create_topic_if_missing():
+    admin_client = KafkaAdminClient(
+        bootstrap_servers=config.BOOTSTRAP_SERVERS,
+        client_id='admin_setup'
+    )
+
+    existing_topics = admin_client.list_topics()
+    
+    if config.TOPIC_RAW not in existing_topics:
+        logger.info(f"Topic '{config.TOPIC_RAW}' not found. Creating it...")
+        
+        # Create topic with 3 partitions
+        topic_list = [NewTopic(
+            name=config.TOPIC_RAW, 
+            num_partitions=3, 
+            replication_factor=1
+        )]
+        
+        try:
+            admin_client.create_topics(new_topics=topic_list, validate_only=False)
+            logger.info("✅ Topic created successfully.")
+        except Exception as e:
+            logger.warning(f"Topic creation failed (might exist): {e}")
+    else:
+        logger.info(f"Topic '{config.TOPIC_RAW}' already exists.")
+        
+    admin_client.close()
 
 def get_producer():
     return KafkaProducer(
@@ -37,6 +66,7 @@ def generate_transaction(user_id=None):
     }
 
 def start_stream():
+    create_topic_if_missing()
     producer = get_producer()
     logger.info(f"🚀 Starting Producer. Target Topic: {config.TOPIC_RAW}")
 
