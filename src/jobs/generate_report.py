@@ -1,12 +1,32 @@
+"""
+Generates two reports for Airflow DAG:
+1. RECONCILIATION REPORT - Ingress vs Validated amounts
+2. ANALYTICS REPORT - Fraud by Merchant Category
+
+Reads data from Parquet files in the data lake
+"""
 import pandas as pd
 import os
+import sys
 import glob
 from datetime import datetime
 
-# Paths mapped via docker volumes
-DATA_LAKE_PATH = "/opt/airflow/data/lake/transactions"  # Valid transactions
-FRAUD_LAKE_PATH = "/opt/airflow/data/lake/fraud"        # Fraud transactions
-REPORT_OUTPUT_PATH = "/opt/airflow/data/reports"
+# Import centralized config
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+try:
+    import config
+    # Use Docker paths when running in Airflow container
+    DATA_LAKE_PATH = config.DOCKER_DATA_LAKE_PATH
+    FRAUD_LAKE_PATH = config.DOCKER_FRAUD_LAKE_PATH
+    REPORT_OUTPUT_PATH = config.DOCKER_REPORT_PATH
+    HOME_COUNTRY = config.HOME_COUNTRY
+except ImportError:
+    # Fallback for direct execution
+    DATA_LAKE_PATH = "/opt/airflow/data/lake/transactions"
+    FRAUD_LAKE_PATH = "/opt/airflow/data/lake/fraud"
+    REPORT_OUTPUT_PATH = "/opt/airflow/data/reports"
+    HOME_COUNTRY = "Sri Lanka"
 
 
 def load_data():
@@ -59,24 +79,24 @@ transactions are properly accounted for.
 ┌─────────────────────────────────────────────────┐
 │  TOTAL INGRESS (Raw Transactions Received)      │
 │  ─────────────────────────────────────────────  │
-│  Count  : {total_ingress_count:>12,}            │
-│  Volume : ${total_ingress_volume:>14,.2f}       │
+│  Count  : {total_ingress_count:>12,}                          │
+│  Volume : ${total_ingress_volume:>14,.2f}                       │
 └─────────────────────────────────────────────────┘
-                      │
-                      ▼
+                         │
+                         ▼
 ┌─────────────────────────────────────────────────┐
 │  VALIDATED (Processed to Data Warehouse)        │
 │  ─────────────────────────────────────────────  │
-│  Count  : {validated_tx_count:>12,}             │
-│  Volume : ${validated_volume:>14,.2f}           │
+│  Count  : {validated_tx_count:>12,}                          │
+│  Volume : ${validated_volume:>14,.2f}                       │
 └─────────────────────────────────────────────────┘
-                      │
-                      ▼
+                         │
+                         ▼
 ┌─────────────────────────────────────────────────┐
 │  FRAUD (Blocked & Quarantined)                  │
 │  ─────────────────────────────────────────────  │
-│  Count  : {fraud_tx_count:>12,}                 │
-│  Volume : ${fraud_volume:>14,.2f}               │
+│  Count  : {fraud_tx_count:>12,}                          │
+│  Volume : ${fraud_volume:>14,.2f}                       │
 └─────────────────────────────────────────────────┘
 
 === RECONCILIATION CHECK ===
@@ -84,19 +104,11 @@ transactions are properly accounted for.
   Ingress - Validated - Fraud = ${reconciliation_diff:,.2f}
   
   Status: {"✓ BALANCED" if abs(reconciliation_diff) < 0.01 else "⚠ DISCREPANCY DETECTED"}
-  
-  (A balanced reconciliation should equal $0.00,
-   indicating all transactions are accounted for)
-
+ 
 === KEY METRICS ===
 
-  Fraud Detection Rate : {fraud_rate:.2f}%
-  Validation Rate      : {100 - fraud_rate:.2f}%
-  
-=== DATA SOURCES ===
-
-  Valid Transaction Files : {len(valid_files)}
-  Fraud Transaction Files : {len(fraud_files)}
+  Fraud Rate      : {fraud_rate:.2f}%
+  Validation Rate : {100 - fraud_rate:.2f}%
 
 =====================================================
            END OF RECONCILIATION REPORT
@@ -118,8 +130,6 @@ transactions are properly accounted for.
 def generate_analytics_report(valid_df, fraud_df, valid_files, fraud_files):
     """
     Generate ANALYTICS REPORT: Fraud Attempts by Merchant Category.
-    
-    Provides detailed breakdown of fraud patterns across merchant categories.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -169,20 +179,20 @@ def generate_analytics_report(valid_df, fraud_df, valid_files, fraud_files):
             fraud_by_type_section += f"  {ftype:20} : {int(row['count']):>6,} ({pct:>5.1f}%) │ ${row['total_amount']:>12,.2f}\n"
             fraud_by_type_section += f"                         {bar}\n"
     
-    # =========================================
-    # Top Fraud Countries (if available)
-    # =========================================
-    fraud_by_country_section = ""
-    if fraud_df is not None and len(fraud_df) > 0 and 'country' in fraud_df.columns:
-        country_fraud = fraud_df.groupby('country').agg(
-            count=('transaction_id', 'count'),
-            total_amount=('amount', 'sum')
-        ).sort_values('count', ascending=False).head(10)
+    # # =========================================
+    # # Top Fraud Countries (if available)
+    # # =========================================
+    # fraud_by_country_section = ""
+    # if fraud_df is not None and len(fraud_df) > 0 and 'country' in fraud_df.columns:
+    #     country_fraud = fraud_df.groupby('country').agg(
+    #         count=('transaction_id', 'count'),
+    #         total_amount=('amount', 'sum')
+    #     ).sort_values('count', ascending=False).head(10)
         
-        fraud_by_country_section = "\n=== FRAUD BY COUNTRY (Top 10) ===\n\n"
-        for country, row in country_fraud.iterrows():
-            pct = (row['count'] / fraud_tx_count * 100) if fraud_tx_count > 0 else 0
-            fraud_by_country_section += f"  {country:20} : {int(row['count']):>6,} ({pct:>5.1f}%) │ ${row['total_amount']:>12,.2f}\n"
+    #     fraud_by_country_section = "\n=== FRAUD BY COUNTRY (Top 10) ===\n\n"
+    #     for country, row in country_fraud.iterrows():
+    #         pct = (row['count'] / fraud_tx_count * 100) if fraud_tx_count > 0 else 0
+    #         fraud_by_country_section += f"  {country:20} : {int(row['count']):>6,} ({pct:>5.1f}%) │ ${row['total_amount']:>12,.2f}\n"
     
     report_content = f"""
 =====================================================
@@ -206,11 +216,6 @@ Schedule : Every 6 Hours
 === FRAUD BY DETECTION TYPE ===
 
 {fraud_by_type_section}
-{fraud_by_country_section}
-=== DATA SOURCES ===
-
-  Fraud Transaction Files: {len(fraud_files)}
-  Analysis Period: All available data in data lake
 
 =====================================================
             END OF ANALYTICS REPORT
