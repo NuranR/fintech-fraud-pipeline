@@ -21,6 +21,7 @@ INPUT_TOPIC = "transactions-raw"
 OUTPUT_TOPIC_FRAUD = "fraud-alerts"
 CHECKPOINT_LOCATION = os.path.join(PROJECT_ROOT, "data/checkpoints/fraud_job")
 PARQUET_OUTPUT_PATH = os.path.join(PROJECT_ROOT, "data/lake/transactions")
+FRAUD_PARQUET_PATH = os.path.join(PROJECT_ROOT, "data/lake/fraud")  # Fraud data for batch reporting
 
 # Fraud Detection Config
 IMPOSSIBLE_TRAVEL_WINDOW = "10 minutes"  # Window to detect impossible travel
@@ -124,12 +125,21 @@ def process_batch(batch_df, batch_id):
         total_fraud = all_fraud.count()
         logger.warning(f"📤 Sending {total_fraud} FRAUD alerts to Kafka topic: {OUTPUT_TOPIC_FRAUD}")
         
+        # Send to Kafka for real-time alerts
         fraud_out = all_fraud.selectExpr("to_json(struct(*)) AS value")
         fraud_out.write \
             .format("kafka") \
             .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \
             .option("topic", OUTPUT_TOPIC_FRAUD) \
             .save()
+        
+        # Also write fraud to Parquet for batch reporting (Airflow can read this)
+        fraud_parquet = all_fraud.withColumn("date", to_timestamp(col("timestamp")).cast("date"))
+        fraud_parquet.write \
+            .mode("append") \
+            .partitionBy("date") \
+            .parquet(FRAUD_PARQUET_PATH)
+        logger.info(f"💾 Saved {total_fraud} fraud transactions to Fraud Lake for batch reporting")
 
     # ===========================================
     # Valid transactions → Data Lake (Parquet)
