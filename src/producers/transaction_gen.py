@@ -24,24 +24,29 @@ def create_topic_if_missing():
     )
 
     existing_topics = admin_client.list_topics()
+
+    topics_to_check = [config.TOPIC_RAW, config.TOPIC_FRAUD]
+    new_topics_list = []
     
-    if config.TOPIC_RAW not in existing_topics:
-        logger.info(f"Topic '{config.TOPIC_RAW}' not found. Creating it...")
-        
-        # Create topic with 3 partitions
-        topic_list = [NewTopic(
-            name=config.TOPIC_RAW, 
-            num_partitions=3, 
-            replication_factor=1
-        )]
-        
+    for topic in topics_to_check:
+        if topic not in existing_topics:
+            logger.info(f"Topic '{topic}' not found. Queueing for creation...")
+            # Create topic with 3 partitions
+            new_topics_list.append(NewTopic(
+                name=topic, 
+                num_partitions=3, 
+                replication_factor=1
+            ))
+        else:
+            logger.info(f"Topic '{topic}' already exists.")
+
+    # Creating all queued topics
+    if new_topics_list:
         try:
-            admin_client.create_topics(new_topics=topic_list, validate_only=False)
-            logger.info("✅ Topic created successfully.")
+            admin_client.create_topics(new_topics=new_topics_list, validate_only=False)
+            logger.info(f"✅ Successfully created {len(new_topics_list)} new topics.")
         except Exception as e:
             logger.warning(f"Topic creation failed (might exist): {e}")
-    else:
-        logger.info(f"Topic '{config.TOPIC_RAW}' already exists.")
         
     admin_client.close()
 
@@ -59,7 +64,7 @@ def generate_transaction(user_id=None):
         "transaction_id": fake.uuid4(),
         "user_id": user_id,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "amount": round(random.uniform(10.0, 5000.0), 2),
+        "amount": round(random.uniform(10.0, 6000.0), 2),
         "currency": "USD",
         "merchant_category": random.choice(["Food", "Electronics", "Travel", "Fashion"]),
         "country": random.choice(config.COUNTRIES)

@@ -5,16 +5,19 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, to_timestamp, struct
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
+# Get project root
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 # Windows environment compatibility for Spark
 if sys.platform.startswith('win'):
-    os.environ['HADOOP_HOME'] = os.getcwd()
-    os.environ['hadoop.home.dir'] = os.getcwd()
+    os.environ['HADOOP_HOME'] = PROJECT_ROOT
+    os.environ['hadoop.home.dir'] = PROJECT_ROOT
 
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
 INPUT_TOPIC = "transactions-raw"
 OUTPUT_TOPIC_FRAUD = "fraud-alerts"
-CHECKPOINT_LOCATION = "data/checkpoints/fraud_job"
-PARQUET_OUTPUT_PATH = "data/lake/transactions"
+CHECKPOINT_LOCATION = os.path.join(PROJECT_ROOT, "data/checkpoints/fraud_job")
+PARQUET_OUTPUT_PATH = os.path.join(PROJECT_ROOT, "data/lake/transactions")
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -50,9 +53,9 @@ def process_batch(batch_df, batch_id):
     batch_df.persist()
 
     # Fraud Detection Logic
-    # Criteria: Amount > 4000 OR Country is UK (Simulation target)
-    fraud_df = batch_df.filter((col("amount") > 4000) | (col("country") == "United Kingdom"))
-    valid_df = batch_df.filter((col("amount") <= 4000) & (col("country") != "United Kingdom"))
+    # Criteria: Amount > 5000 OR Country is UK (Simulation target)
+    fraud_df = batch_df.filter((col("amount") > 5000) | (col("country") == "United Kingdom"))
+    valid_df = batch_df.filter((col("amount") <= 5000) & (col("country") != "United Kingdom"))
 
     # Sink 1: High priority alerts to Kafka
     if not fraud_df.isEmpty():
@@ -88,7 +91,7 @@ def run():
         .format("kafka") \
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \
         .option("subscribe", INPUT_TOPIC) \
-        .option("startingOffsets", "latest") \
+        .option("startingOffsets", "earliest") \
         .load()
 
     # Parse JSON

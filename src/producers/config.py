@@ -6,9 +6,9 @@ TOPIC_FRAUD = "fraud-alerts"
 TOPIC_VALID = "transactions-validated"
 
 COUNTRIES = [
-    "Sri Lanka", "USA", "UK", "Singapore", 
+    "Sri Lanka", "USA", "United Kingdom", "Singapore", 
     "Australia", "Germany", "Japan", "UAE"
 ]
 
 FRAUD_TRIGGER_PROBABILITY = 0.1
-FRAUD_TIME_DELTA_SECONDS = 120
+FRAUD_TIME_DELTA_SECONDS = 600
