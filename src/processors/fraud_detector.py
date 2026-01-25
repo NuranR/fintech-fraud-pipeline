@@ -2,7 +2,10 @@ import logging
 import os
 import sys
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, to_timestamp, struct
+from pyspark.sql.functions import (
+    from_json, col, to_timestamp, window, collect_set, 
+    size, array_distinct, expr, lit, struct, first
+)
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
 # Get project root
@@ -18,6 +21,11 @@ INPUT_TOPIC = "transactions-raw"
 OUTPUT_TOPIC_FRAUD = "fraud-alerts"
 CHECKPOINT_LOCATION = os.path.join(PROJECT_ROOT, "data/checkpoints/fraud_job")
 PARQUET_OUTPUT_PATH = os.path.join(PROJECT_ROOT, "data/lake/transactions")
+
+# Fraud Detection Config
+IMPOSSIBLE_TRAVEL_WINDOW = "10 minutes"  # Window to detect impossible travel
+WATERMARK_DELAY = "2 minutes"            # Allow late data up to 2 minutes
+HIGH_VALUE_THRESHOLD = 5000              # Amount threshold for high-value fraud
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -49,34 +57,93 @@ def process_batch(batch_df, batch_id):
         
     logger.info(f"⚡ Processing Batch ID: {batch_id} with {batch_df.count()} records")
     
-    # Cache data because we are using it twice, to avoid reading from kafka again
+    # Cache data because we are using it multiple times
     batch_df.persist()
 
-    # Fraud Detection Logic
-    # Criteria: Amount > 5000 OR Country is UK (Simulation target)
-    fraud_df = batch_df.filter((col("amount") > 5000) | (col("country") == "United Kingdom"))
-    valid_df = batch_df.filter((col("amount") <= 5000) & (col("country") != "United Kingdom"))
+    # ===========================================
+    # FRAUD TYPE 1: High Value Transactions (> $5000)
+    # ===========================================
+    high_value_fraud = batch_df.filter(col("amount") > HIGH_VALUE_THRESHOLD) \
+        .withColumn("fraud_type", lit("HIGH_VALUE")) \
+        .withColumn("fraud_reason", expr(f"concat('Amount $', amount, ' exceeds ${HIGH_VALUE_THRESHOLD} threshold')"))
+    
+    if not high_value_fraud.isEmpty():
+        count = high_value_fraud.count()
+        logger.warning(f"🚨 HIGH VALUE FRAUD: {count} transactions over ${HIGH_VALUE_THRESHOLD}!")
 
-    # Sink 1: High priority alerts to Kafka
-    if not fraud_df.isEmpty():
-        logger.warning(f"🚨 Detected {fraud_df.count()} FRAUD transactions!")
-        fraud_out = fraud_df.selectExpr("to_json(struct(*)) AS value")
+    # ===========================================
+    # FRAUD TYPE 2: Impossible Travel Detection
+    # Uses windowing to find same user in different countries within 10 minutes
+    # ===========================================
+    
+    # Group transactions by user within a 10-minute TUMBLING window (non-overlapping)
+    # This prevents the same fraud from being detected multiple times
+    windowed_df = batch_df \
+        .withColumn("event_time", to_timestamp(col("timestamp"))) \
+        .groupBy(
+            col("user_id"),
+            window(col("event_time"), IMPOSSIBLE_TRAVEL_WINDOW)  # Tumbling window (no slide = no overlap)
+        ) \
+        .agg(
+            collect_set("country").alias("countries"),
+            collect_set("transaction_id").alias("transaction_ids"),
+            first("timestamp").alias("first_timestamp"),
+            first("amount").alias("amount"),
+            first("currency").alias("currency"),
+            first("merchant_category").alias("merchant_category")
+        )
+    
+    # Filter users with transactions from multiple countries in the window
+    impossible_travel_fraud = windowed_df \
+        .filter(size(col("countries")) > 1) \
+        .withColumn("fraud_type", lit("IMPOSSIBLE_TRAVEL")) \
+        .withColumn("fraud_reason", expr("concat('User transacted from ', size(countries), ' countries: ', concat_ws(', ', countries), ' within 10 minutes')")) \
+        .withColumn("country", expr("concat_ws(', ', countries)")) \
+        .withColumn("transaction_id", expr("concat_ws(', ', transaction_ids)")) \
+        .withColumn("timestamp", col("first_timestamp")) \
+        .select("transaction_id", "user_id", "timestamp", "amount", "currency", 
+                "merchant_category", "country", "fraud_type", "fraud_reason")
+    
+    if not impossible_travel_fraud.isEmpty():
+        count = impossible_travel_fraud.count()
+        # Show details in logs (use 'country' which now contains the joined countries list)
+        impossible_travel_fraud.select("user_id", "country", "fraud_reason").show(truncate=False)
+        logger.warning(f"🚨 IMPOSSIBLE TRAVEL FRAUD: {count} users detected in multiple countries!")
+
+    # ===========================================
+    # Combine all fraud and send to Kafka
+    # ===========================================
+    high_value_for_kafka = high_value_fraud.select(
+        "transaction_id", "user_id", "timestamp", "amount", "currency",
+        "merchant_category", "country", "fraud_type", "fraud_reason"
+    )
+    
+    all_fraud = high_value_for_kafka.union(impossible_travel_fraud)
+    
+    if not all_fraud.isEmpty():
+        total_fraud = all_fraud.count()
+        logger.warning(f"📤 Sending {total_fraud} FRAUD alerts to Kafka topic: {OUTPUT_TOPIC_FRAUD}")
         
+        fraud_out = all_fraud.selectExpr("to_json(struct(*)) AS value")
         fraud_out.write \
             .format("kafka") \
             .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \
             .option("topic", OUTPUT_TOPIC_FRAUD) \
             .save()
 
-    # Sink 2: Valid transactions to Data Lake (Parquet)
+    # ===========================================
+    # Valid transactions → Data Lake (Parquet)
+    # ===========================================
+    # Exclude high-value fraud from valid transactions
+    valid_df = batch_df.filter(col("amount") <= HIGH_VALUE_THRESHOLD)
+    
     if not valid_df.isEmpty():
-        # Adding date column to partition folders by day (YYYY-MM-DD)
         valid_out = valid_df.withColumn("date", to_timestamp(col("timestamp")).cast("date"))
-        
         valid_out.write \
             .mode("append") \
             .partitionBy("date") \
             .parquet(PARQUET_OUTPUT_PATH)
+        logger.info(f"💾 Saved {valid_df.count()} valid transactions to Data Lake")
             
     batch_df.unpersist()
 

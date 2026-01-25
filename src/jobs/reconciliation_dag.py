@@ -21,7 +21,7 @@ with DAG(
     'daily_reconciliation_job',
     default_args=default_args,
     description='Aggregates validated transactions from Data Lake',
-    schedule_interval='@daily',
+    schedule_interval='0 */6 * * *',  # Every 6 hours (00:00, 06:00, 12:00, 18:00)
     start_date=datetime(2023, 1, 1),
     catchup=False, # Don't run for past dates
     tags=['fintech', 'reporting'],

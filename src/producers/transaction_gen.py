@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 fake = Faker()
 
+# Track active users for realistic fraud simulation
+active_users = {}
+USER_POOL_SIZE = 50  # Pool of recurring users for realistic patterns
+
 def create_topic_if_missing():
     admin_client = KafkaAdminClient(
         bootstrap_servers=config.BOOTSTRAP_SERVERS,
@@ -56,7 +60,7 @@ def get_producer():
         value_serializer=lambda x: json.dumps(x).encode('utf-8')
     )
 
-def generate_transaction(user_id=None):
+def generate_transaction(user_id=None, country=None):
     if not user_id:
         user_id = fake.uuid4()
         
@@ -64,45 +68,78 @@ def generate_transaction(user_id=None):
         "transaction_id": fake.uuid4(),
         "user_id": user_id,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "amount": round(random.uniform(10.0, 6000.0), 2),
+        "amount": round(random.uniform(10.0, 4500.0), 2),  # Normal transactions under $5000
         "currency": "USD",
         "merchant_category": random.choice(["Food", "Electronics", "Travel", "Fashion"]),
-        "country": random.choice(config.COUNTRIES)
+        "country": country if country else random.choice(config.COUNTRIES)
     }
+
+def generate_high_value_fraud():
+    """Generate a transaction with amount > $5000 (automatic fraud)"""
+    tx = generate_transaction()
+    tx['amount'] = round(random.uniform(5001.0, 15000.0), 2)
+    return tx
+
+def generate_impossible_travel_fraud():
+    """
+    Generate impossible travel fraud:
+    Same user transacts from two DIFFERENT countries within the time window.
+    The fraud detector will catch this pattern.
+    """
+    user_id = fake.uuid4()
+    
+    # Pick two DIFFERENT random countries
+    country1 = random.choice(config.COUNTRIES)
+    country2 = random.choice([c for c in config.COUNTRIES if c != country1])
+    
+    # First transaction from country1
+    tx1 = generate_transaction(user_id=user_id, country=country1)
+    
+    # Second transaction from country2 (within the detection window)
+    tx2 = generate_transaction(user_id=user_id, country=country2)
+    # Add small time offset (1-5 minutes) - well within 10 min window
+    t1 = datetime.strptime(tx1['timestamp'], "%Y-%m-%d %H:%M:%S")
+    t2 = t1 + timedelta(seconds=random.randint(60, 300))
+    tx2['timestamp'] = t2.strftime("%Y-%m-%d %H:%M:%S")
+    
+    return tx1, tx2, country1, country2
 
 def start_stream():
     create_topic_if_missing()
     producer = get_producer()
     logger.info(f"🚀 Starting Producer. Target Topic: {config.TOPIC_RAW}")
+    logger.info(f"📊 Fraud injection probability: {config.FRAUD_TRIGGER_PROBABILITY * 100}%")
 
     try:
         while True:
-            # Randomly inject a fraud pattern based on probability
-            if random.random() < config.FRAUD_TRIGGER_PROBABILITY:
+            rand = random.random()
+            
+            # 10% chance: Inject impossible travel fraud (two transactions, different countries)
+            if rand < config.FRAUD_TRIGGER_PROBABILITY:
+                tx1, tx2, country1, country2 = generate_impossible_travel_fraud()
                 
-                # Valid transaction (Origin: Sri Lanka)
-                victim_id = fake.uuid4()
-                tx1 = generate_transaction(user_id=victim_id)
-                tx1['country'] = "Sri Lanka"
-                
+                # Send first transaction
                 producer.send(config.TOPIC_RAW, value=tx1)
-                logger.info(f"Generated Legitimate: User {victim_id[:8]}... at {tx1['country']}")
-
-                # Impossible travel transaction (Target: UK, +2 mins)
-                tx2 = generate_transaction(user_id=victim_id)
-                tx2['country'] = "United Kingdom"
-                t1 = datetime.strptime(tx1['timestamp'], "%Y-%m-%d %H:%M:%S")
-                t2 = t1 + timedelta(seconds=config.FRAUD_TIME_DELTA_SECONDS)
-                tx2['timestamp'] = t2.strftime("%Y-%m-%d %H:%M:%S")
-
+                logger.info(f"🌍 User {tx1['user_id'][:8]}... transacted from {country1}")
+                
+                # Small delay to simulate real-world timing
+                time.sleep(random.uniform(0.5, 2))
+                
+                # Send second transaction (impossible travel)
                 producer.send(config.TOPIC_RAW, value=tx2)
-                logger.warning(f"⚠️  INJECTED FRAUD: User {victim_id[:8]}... jumped to {tx2['country']} in 2 mins!")
-
+                logger.warning(f"⚠️  IMPOSSIBLE TRAVEL: User {tx2['user_id'][:8]}... jumped {country1} → {country2}!")
+            
+            # 5% chance: High value fraud (> $5000)
+            elif rand < config.FRAUD_TRIGGER_PROBABILITY + 0.05:
+                tx = generate_high_value_fraud()
+                producer.send(config.TOPIC_RAW, value=tx)
+                logger.warning(f"💰 HIGH VALUE: User {tx['user_id'][:8]}... spent ${tx['amount']:.2f}")
+            
+            # 85% chance: Normal legitimate transaction
             else:
-                # Standard random transaction
                 tx = generate_transaction()
                 producer.send(config.TOPIC_RAW, value=tx)
-                logger.debug(f"Sent normal tx: {tx['transaction_id']}")
+                logger.debug(f"✅ Normal: {tx['user_id'][:8]}... ${tx['amount']:.2f} in {tx['country']}")
 
             time.sleep(1)
 

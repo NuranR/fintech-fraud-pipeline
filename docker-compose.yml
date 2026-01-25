@@ -63,9 +63,11 @@ services:
       - "8081:8080"
     depends_on:
       - postgres
+      - kafka
     # Limit Airflow to 2GB to protect Host RAM
     mem_limit: 2g
-    command: standalone
+    command: >
+      bash -c "pip install kafka-python pandas pyarrow && airflow standalone"
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
