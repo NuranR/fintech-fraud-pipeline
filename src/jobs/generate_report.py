@@ -179,21 +179,6 @@ def generate_analytics_report(valid_df, fraud_df, valid_files, fraud_files):
             fraud_by_type_section += f"  {ftype:20} : {int(row['count']):>6,} ({pct:>5.1f}%) │ ${row['total_amount']:>12,.2f}\n"
             fraud_by_type_section += f"                         {bar}\n"
     
-    # # =========================================
-    # # Top Fraud Countries (if available)
-    # # =========================================
-    # fraud_by_country_section = ""
-    # if fraud_df is not None and len(fraud_df) > 0 and 'country' in fraud_df.columns:
-    #     country_fraud = fraud_df.groupby('country').agg(
-    #         count=('transaction_id', 'count'),
-    #         total_amount=('amount', 'sum')
-    #     ).sort_values('count', ascending=False).head(10)
-        
-    #     fraud_by_country_section = "\n=== FRAUD BY COUNTRY (Top 10) ===\n\n"
-    #     for country, row in country_fraud.iterrows():
-    #         pct = (row['count'] / fraud_tx_count * 100) if fraud_tx_count > 0 else 0
-    #         fraud_by_country_section += f"  {country:20} : {int(row['count']):>6,} ({pct:>5.1f}%) │ ${row['total_amount']:>12,.2f}\n"
-    
     report_content = f"""
 =====================================================
          ANALYTICS REPORT
