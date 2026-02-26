@@ -4,13 +4,7 @@ Real-time credit card fraud detection system using Apache Kafka, Spark Structure
 
 ## Architecture
 
-```
-[Transaction Generator] → [Kafka] → [Spark Streaming] → [Parquet Data Lake]
-                                            ↓
-                                    [Fraud Alerts Topic]
-
-[Airflow DAG] → Reads Parquet → Generates Reports (Every 6 Hours)
-```
+![Pipeline Architecture](assets/architecture-diagram.png)
 
 ## Fraud Detection Rules
 
