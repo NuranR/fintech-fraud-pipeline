@@ -27,6 +27,7 @@ pip install -r requirements.txt
 
 # 3. Initialize data folders (run from project root)
 scripts\clean_data.bat       # Windows
+# ./scripts/clean_data.sh    # Linux
 # Or manually create: data/checkpoints, data/lake/transactions, data/reports
 
 # 4. Start Spark fraud detector (Terminal 1)
